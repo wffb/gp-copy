@@ -1,0 +1,60 @@
+# Mac
+.DS_Store
+
+# IDEs
+.idea/
+
+# VSCode
+.vscode/
+
+# Node / Frontend artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/.eslintcache
+frontend/.parcel-cache/
+
+# Local env files (keep examples)
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Certificates and keys (mkcert, SSL, etc.)
+frontend/certs/
+*.pem
+*.key
+*.crt
+*.pfx
+*.cer
+*.der
+
+# Build cache
+.cache/
+**/.cache/
+
+# OS files
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Python (backend) common artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+backend/.mypy_cache/
+backend/uv.lock

@@ -1,0 +1,90 @@
+# Airflow 3.1.0 on Python 3.11
+FROM apache/airflow:3.1.0-python3.11
+
+# ---- system deps (minimal) ----
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        vim git curl wget build-essential pkg-config libpq-dev \
+        htop postgresql-client redis-tools net-tools \
+    && apt-get autoremove -yqq --purge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional system tools for debugging
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        htop \
+        postgresql-client \
+        redis-tools \
+        net-tools \
+        && rm -rf /var/lib/apt/lists/*
+
+# Switch back to airflow user
+USER airflow
+
+# Use Airflow’s constraints to avoid dependency skew (incl. SQLAlchemy)
+ARG AIRFLOW_VERSION=3.1.0
+ARG PYTHON_VERSION=3.11
+ARG CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
+      apache-airflow-providers-postgres \
+      apache-airflow-providers-http \
+      apache-airflow-providers-fab \
+      feedparser \
+      requests \
+      psutil \
+      virtualenv \
+      cloudpickle \
+      # DocETL processing dependencies
+      docetl>=0.1.0 \
+      openai>=1.0.0 \
+      PyMuPDF==1.26.5 \
+      langdetect==1.0.9
+
+
+# Copy application code
+COPY --chown=airflow:root ./airflow/dags /opt/airflow/dags/
+COPY --chown=airflow:root ./airflow/plugins /opt/airflow/plugins/
+COPY --chown=airflow:root ./airflow/variables /opt/airflow/variables/
+
+# Copy application modules
+COPY --chown=airflow:root ./constants /opt/airflow/constants/
+COPY --chown=airflow:root ./database /opt/airflow/database/
+COPY --chown=airflow:root ./services /opt/airflow/services/
+COPY --chown=airflow:root ./utils /opt/airflow/utils/
+
+# Note: SQL migrations are mounted from external shared folder via volume
+# See docker-compose.yml volumes section
+
+# Create necessary directories
+RUN mkdir -p /opt/airflow/logs \
+             /opt/airflow/logs_app \
+             /opt/airflow/plugins \
+             /opt/airflow/data \
+             /opt/airflow/backups
+
+# Set working directory
+WORKDIR /opt/airflow
+
+ENV PYTHONWARNINGS="ignore::airflow.exceptions.RemovedInAirflow4Warning"
+ENV AIRFLOW_HOME=/opt/airflow
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH="/opt/airflow:/opt/airflow/dags:${PYTHONPATH}"
+
+# Health check script
+COPY --chown=airflow:root ./scripts/health_check.py /opt/airflow/scripts/health_check.py
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD python /opt/airflow/scripts/health_check.py
+
+# Expose ports
+EXPOSE 8080
+
+# Default command (can be overridden)
+CMD ["airflow", "webserver"]

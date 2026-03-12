@@ -1,0 +1,285 @@
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.airflow
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-NsmSfax71bHQE2c7i8xQjBmqkaLmejQxqCBtI0Xl_kU=}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    
+    # Auth Manager - FAB (Flask-AppBuilder) for Airflow 3.x
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW__CORE__PARALLELISM: "16"
+    AIRFLOW__CORE__DAG_CONCURRENCY: "16"
+    AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+    AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "false"
+    AIRFLOW__LOGGING__LOGGING_LEVEL: "INFO"
+    AIRFLOW__LOGGING__COLORED_CONSOLE_LOG: "false"
+    AIRFLOW__CORE__EXECUTOR_DEBUG: ${DEBUG:-true}
+    
+    # Database Configuration
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_DATABASE_URL:-postgresql+psycopg2://zara_user:zara_password@postgres:5432/${AIRFLOW_DB_NAME:-zara_airflow}}
+    AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "true"
+    AIRFLOW__CORE__MIN_SERIALIZED_DAG_UPDATE_INTERVAL: "30"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_API_JWT_SECRET:-YxdHVy4Shcm90sI6nik0DI2XW0Ta0zcU3JqcLvizx4=}
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY:-8kBLu6pnYgMsACjYx4kRA8QNz+uC1YlRVIJTjJNvw+c=}
+    
+    # Application Database (for business logic)
+    DATABASE_URL: ${DATABASE_URL:-postgresql://zara_user:zara_password@postgres:5432/${ETL_DB_NAME:-zara_etl}}
+    
+    # Database names for initialization scripts
+    AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:-zara_airflow}
+    ETL_DB_NAME: ${ETL_DB_NAME:-zara_etl}
+    SKIP_DB_CREATION: ${SKIP_DB_CREATION:-false}
+    
+    # Environment Variables from .env
+    ENVIRONMENT: ${ENVIRONMENT:-development}
+    DEBUG: ${DEBUG:-true}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    PYTHONPATH: "/opt/airflow:/opt/airflow/dags"
+    
+    # API Keys
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
+    OPENAI_API_BASE: ${OPENAI_API_BASE:-}
+    DEFAULT_MODEL: ${DEFAULT_MODEL:-gpt-4o-mini}
+    
+    # ArXiv Configuration
+    ARXIV_MAX_RESULTS: ${ARXIV_MAX_RESULTS:-400}
+    ARXIV_CATEGORIES: ${ARXIV_CATEGORIES:-cs.AI,cs.CL,cs.LG}
+    ARXIV_MAX_RESULTS_PER_REQUEST: ${ARXIV_MAX_RESULTS_PER_REQUEST:-50}
+    ARXIV_SORT_BY: ${ARXIV_SORT_BY:-submittedDate}
+    ARXIV_SORT_ORDER: ${ARXIV_SORT_ORDER:-descending}
+    ARXIV_START_INDEX: ${ARXIV_START_INDEX:-0}
+    ARXIV_RATE_LIMIT_SECONDS: ${ARXIV_RATE_LIMIT_SECONDS:-3}
+    
+    # Processing Configuration
+    BATCH_SIZE: ${BATCH_SIZE:-50}
+    ARXIV_MAX_RETRIES: ${ARXIV_MAX_RETRIES:-3}
+    QUALITY_THRESHOLD: ${QUALITY_THRESHOLD:-0.7}
+    
+    # Cost Management
+    DAILY_BUDGET_LIMIT: ${DAILY_BUDGET_LIMIT:-500.00}
+    MONTHLY_BUDGET_LIMIT: ${MONTHLY_BUDGET_LIMIT:-8000.00}
+
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./airflow/variables:/opt/airflow/variables
+    - ./storage/airflow-logs:/opt/airflow/logs
+    - ./storage/data:/opt/airflow/data
+    - ./storage/logs:/opt/airflow/logs_app
+    - ./storage/backups:/opt/airflow/backups
+    - ./constants:/opt/airflow/constants
+    - ./database:/opt/airflow/database
+    - ../database:/opt/airflow/shared_migrations
+    - ./services:/opt/airflow/services
+    - ./utils:/opt/airflow/utils
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+  # =============================================================================
+  # DATABASE SERVICES
+  # =============================================================================
+  
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: zara_user
+      POSTGRES_PASSWORD: zara_password
+      POSTGRES_DB: postgres
+      # Pass database names to initialization scripts
+      AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:-zara_airflow}
+      ETL_DB_NAME: ${ETL_DB_NAME:-zara_etl}
+      SKIP_DB_CREATION: ${SKIP_DB_CREATION:-false}
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+      - ../database:/shared_migrations:ro  # External shared SQL migrations
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "zara_user", "-d", "postgres"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    ports:
+      - "5432:5432"
+    profiles:
+      - ""  # Always included
+      - local  # Include in local profile (for local postgres)
+
+  # =============================================================================
+  # AIRFLOW SERVICES
+  # =============================================================================
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        # Create all necessary directories
+        echo "Creating project directories..."
+        mkdir -p /sources/storage/airflow-logs
+        mkdir -p /sources/storage/logs/{airflow,docetl}
+        mkdir -p /sources/storage/data/{input,processed,output,cache}
+        mkdir -p /sources/storage/backups
+        mkdir -p /sources/airflow/{dags,plugins,variables}
+        mkdir -p /sources/services /sources/utils
+        
+        # Set proper permissions
+        chown -R "${AIRFLOW_UID:-50000}:0" /sources/{storage,airflow,services,utils,database} || true
+        
+        # Step 1: Generate variables.json from .env (before Airflow init)
+        echo "Generating variables from .env..."
+        python3 /sources/scripts/generate_variables.py --output /sources/airflow/variables/variables.json
+        
+        # Step 2: Run Airflow's built-in initialization (DB migrate + user creation)
+        echo "Initializing Airflow..."
+        /entrypoint bash -c "
+          # Initialize Airflow (DB migrate + user creation)
+          airflow version
+          
+          # Import generated variables (will be encrypted with Fernet key)
+          if [ -f /sources/airflow/variables/variables.json ]; then
+            echo 'Importing variables to Airflow...'
+            airflow variables import /sources/airflow/variables/variables.json
+            echo 'Variables encrypted and stored in Airflow database'
+          fi
+          
+          # Reserialize DAGs
+          airflow dags reserialize || echo 'No DAGs to reserialize yet'
+          
+          echo 'Airflow initialization completed successfully'
+        "
+    environment:
+      <<: *airflow-common-env
+      PYTHONPATH: "/sources:/opt/airflow:/opt/airflow/dags"
+      AIRFLOW__DAG_BUNDLES__BUNDLES: ""
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+      _PIP_ADDITIONAL_REQUIREMENTS: ""
+    user: "0:0"
+    volumes:
+      - .:/sources
+
+  airflow-cli:
+    <<: *airflow-common
+    profiles:
+      - debug
+    environment:
+      <<: *airflow-common-env
+      CONNECTION_CHECK_MAX_COUNT: "0"
+    command:
+      - bash
+      - -c
+      - airflow
+
+  # =============================================================================
+  # MONITORING SERVICES
+  # =============================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # =============================================================================
+  # DEVELOPMENT TOOLS
+  # =============================================================================
+
+  adminer:
+    image: adminer:latest
+    restart: always
+    ports:
+      - "8081:8080"
+    profiles:
+      - tools
+
+volumes:
+  postgres-db-volume:
+  prometheus-data:
+  grafana-data:

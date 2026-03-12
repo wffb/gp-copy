@@ -1,0 +1,12 @@
+services:
+  # Certificate Generation Service
+  certificate-generator:
+    image: alpine:latest
+    container_name: certificate-generator
+    volumes:
+      - ./backend/certs:/backend-certs
+      - ./frontend/certs:/frontend-certs
+      - ./generate-certs.sh:/generate-certs.sh:ro
+    command: sh /generate-certs.sh
+    profiles:
+      - setup
